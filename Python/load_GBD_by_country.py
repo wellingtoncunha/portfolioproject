@@ -2,10 +2,7 @@ import psycopg2
 import os
 import unicodedata
 import shutil
-import patoolib
-#from rarfile import RarFile
-import rarfile
-from rarfile import RarFile
+import zipfile
 
 def load_file_to_postgres(connection_string, file_name, table_name, delimiter):
     connection = psycopg2.connect(connection_string)
@@ -18,34 +15,23 @@ def load_file_to_postgres(connection_string, file_name, table_name, delimiter):
             DELIMITER AS '""" + delimiter + """'
             """
     cursor.copy_expert(sql = copy_statement, file = source_file)
-#    cursor.copy_from(
-#        file=source_file,
-#        table=table_name,
-#        sep='\t',
-#        null='null'\
-#        )
     connection.commit()
-        
-def load_gbd():
-    files = os.listdir(base_folder)
-    for file in files:
-        if file.find("csv") > -1:
-            source_file = open(os.path.join(base_folder, file))
-            copy_statement = """
-                COPY gbd_by_country FROM STDIN WITH
-                    CSV
-                    HEADER
-                    DELIMITER AS ','
-                """
-            cursor.copy_expert(sql = copy_statement, file = source_file)
-            #cursor.copy_from(
-            #        file=source_file,
-            #        table="gbd",
-            #        # columns=('name', 'country', 'source', 'type'),
-            #        sep=',', #'\t',
-            #        null='NULL'
-            #    )
-            connection.commit()
+
+def export_query_result(connection_string, file_name, query_file, delimiter):
+    with open(query_file, 'r') as query_file:
+        query_string = query_file.read()
+    query_string = str(query_string)
+
+    connection = psycopg2.connect(connection_string)
+    cursor = connection.cursor()
+    target_file = open(file_name, "w+")
+    copy_statement = """
+        COPY (""" + query_string + """) TO STDIN WITH
+            CSV
+            HEADER
+            DELIMITER AS '""" + delimiter + """'
+            """
+    cursor.copy_expert(sql = copy_statement, file = target_file)
 
 def create_temporary_folder(folder_name):
     if not os.path.exists(folder_name):
@@ -91,29 +77,28 @@ def main():
     #Load gbd files
     files = os.listdir(source_folder)
     for file in files:
-        if file.find("rar") > -1:
+        if file.find("zip") > -1 and file.find("DATA") > -1:
             gbd_folder = os.path.join(temporary_folder, "gbd")
             
-            #RarFile.UNRAR_TOOL = "UnRAR Free.app"
-            #with RarFile(os.path.join(source_folder, file)) as rf:
-            #    rf.extractall()
-
-            rarfile.UNRAR_TOOL = "/users/wellingtoncunha/Downloads/rar/unrar"
-            #rarfile.RarFile(os.path.join(source_folder, file)).extractall(gbd_folder)
-            opened_rar = rarfile.RarFile(os.path.join(source_folder, file))
-            for f in opened_rar.infolist():
-                print (f.filename, f.file_size)
-            
-            opened_rar.extractall()
-            #RarFile(os.path.join(source_folder, file)).extract(path=gbd_folder)
-            
-            patoolib.extract_archive(os.path.join(source_folder, file), outdir=gbd_folder)
-            for each in gbd_folder:
+            zip_file = zipfile.ZipFile(os.path.join(source_folder ,file))
+            zip_file.extractall(gbd_folder)
+            zip_file.close()
+ 
+            for each in os.listdir(gbd_folder):
                 if each.find("csv") > -1:
                     load_file_to_postgres(connection_string, os.path.join(gbd_folder, each), "public.gbd_by_country", ',')
             remove_temporary_folder(gbd_folder)
 
     remove_temporary_folder(temporary_folder)
+
+    export_query_result(
+        connection_string=connection_string, 
+        file_name=os.path.join(source_folder, "gbd_daly_rate_by_country_and_year.txt"), 
+        query_file=os.path.join(scripts_folder, "export_gbd_to_sas.sql"), 
+        delimiter='\t'
+    )
+
+    print("Complete without errors!")
 
 if __name__ == "__main__":
     main()
