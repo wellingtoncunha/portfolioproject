@@ -211,6 +211,89 @@ proc sql;
 		clusters;
 quit;
 
+*Select Level 3 of disease;
+PROC SQL;
+	CREATE TABLE GBD_LEVEL_3 AS
+	SELECT *
+	FROM GBD
+	WHERE HIERARCHY_LEVEL = 3;
+QUIT;
+
+*Avg by country and disease and ranking disease by country partition;
+PROC SQL;
+	CREATE TABLE GBD_BY_CNTRY_AND_DISEASE_TMP_L3 AS
+	SELECT 
+		country,
+		cause_name,
+		avg(val) as avg_daly_rate
+	FROM
+		GBD_LEVEL_3
+	group by country, cause_name
+	order by country, avg_daly_rate desc, cause_name;
+	
+	CREATE TABLE GBD_BY_CNTRY_AND_DISEASE_L3 AS 		
+	SELECT *, monotonic() as row_id
+	FROM
+		GBD_BY_CNTRY_AND_DISEASE_TMP_L3
+	order by country, avg_daly_rate desc, cause_name;
+
+	CREATE TABLE GBD_BY_CNTRY_AND_DISEASE_RANK_L3 AS
+	SELECT 
+		a.country,
+		a.cause_name,
+		a.avg_daly_rate,
+		(select count(b.avg_daly_rate) 
+		 from GBD_BY_CNTRY_AND_DISEASE_L3 b 
+		 where a.country = b.country
+		 and a.row_id >= b.row_id) as rank_by_country,
+		a.row_id
+	FROM
+		GBD_BY_CNTRY_AND_DISEASE_L3 a;
+	
+	CREATE TABLE GBD_TOP10_BY_COUNTRY_L3 as
+	select *
+	from GBD_BY_CNTRY_AND_DISEASE_RANK_L3
+	where rank_by_country <= 10
+	order by country, rank_by_country;
+QUIT;
+
+PROC SORT DATA=GBD_TOP10_BY_COUNTRY_L3; BY country cause_name;
+
+PROC SQL;
+	CREATE TABLE GBD_DISEASE_ASSOCIATION AS
+	SELECT
+		a.row_id, a.country, a.cause_name as disease1, b.cause_name as disease2
+	FROM
+		GBD_TOP10_BY_COUNTRY_L3 a 
+		join GBD_TOP10_BY_COUNTRY_L3 b on a.country = b.country
+	WHERE a.cause_name <> b.cause_name
+	  and a.cause_name < b.cause_name;
+
+	create table GBD_DISEASE1 as 
+	select disease1, count(1) as qtyoccurencesdisease1
+	from
+		GBD_DISEASE_ASSOCIATION
+	group by disease1;
+	
+	create table GBD_ASSOCIATION_CANDIDATES as
+	select a.disease1, a.disease2, count(country) as qtyoccurencesofboth, qtyoccurencesdisease1,
+		(select count(distinct country) from GBD_DISEASE_ASSOCIATION) as qtycountries
+	from
+		GBD_DISEASE_ASSOCIATION as a
+		join GBD_DISEASE1 as b on a.disease1 = b.disease1
+	group by a.disease1, a.disease2, qtyoccurencesdisease1;
+	
+	select 
+		CATX(' ', 'If disease', disease1, 'is present, then disease', disease2, 'is present') as Rule,
+		qtyoccurencesofboth / qtycountries as support,
+		qtyoccurencesofboth / qtyoccurencesdisease1 as confidence,
+		qtyoccurencesofboth,
+		qtyoccurencesdisease1,
+		qtycountries
+	from 
+		GBD_ASSOCIATION_CANDIDATES (obs=20)
+	order by 2 desc, 3 desc;
+quit;
 
 
 /*
